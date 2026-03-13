@@ -125,6 +125,23 @@ def handle_message(event):
         return
 
     # 一般訊息 — 如果有設定語言則自動翻譯
+    if source_id not in language_settings:
+        reply = (
+            "⚠️ 請設置語言\n\n"
+            "📖 LINE 翻譯機器人\n\n"
+            "指令列表：\n"
+            "/setlang <語言1> <語言2>\n"
+            "  設定翻譯語言\n"
+            "  範例：/setlang 中文 英文\n\n"
+            "/status  查看目前設定\n\n"
+            "/stop    停止翻譯\n\n"
+            "/help    顯示此說明\n\n"
+            "語言名稱範例：\n"
+            "中文、英文、日文、韓文、法文、德文、西班牙文"
+        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+
     if source_id in language_settings:
         s = language_settings[source_id]
         try:
