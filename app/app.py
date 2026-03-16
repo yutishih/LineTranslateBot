@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 line_bot_api = LineBotApi(os.environ["LINE_CHANNEL_ACCESS_TOKEN"])
 handler = WebhookHandler(os.environ["LINE_CHANNEL_SECRET"])
-anthropic_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+anthropic_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5)
 
 # In-memory storage: key = source ID (group/room/user), value = {"lang1": ..., "lang2": ...}
 language_settings = {}
@@ -147,6 +147,12 @@ def handle_message(event):
         try:
             result = translate(text, s["lang1"], s["lang2"])
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=result))
+        except anthropic.APIStatusError as e:
+            if e.status_code >= 500:
+                msg = "❌ 翻譯服務暫時無法使用，請稍後再試"
+            else:
+                msg = f"❌ 翻譯失敗：{e.message}"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
         except Exception as e:
             line_bot_api.reply_message(
                 event.reply_token,
