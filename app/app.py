@@ -64,9 +64,12 @@ def handle_message(event):
 
     # /setlang <語言1> <語言2>
     if text.lower().startswith("/setlang "):
-        parts = text.split(maxsplit=2)
-        if len(parts) == 3:
-            lang1, lang2 = parts[1], parts[2]
+        arg = text[len("/setlang "):].strip()
+        # 支援空白、全形逗號、半形逗號作為分隔符
+        import re
+        parts = re.split(r"[，,\s]+", arg, maxsplit=1)
+        if len(parts) == 2 and parts[0] and parts[1]:
+            lang1, lang2 = parts[0].strip(), parts[1].strip()
             language_settings[source_id] = {"lang1": lang1, "lang2": lang2}
             reply = (
                 f"✅ 翻譯語言設定成功！\n"
