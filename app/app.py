@@ -1,12 +1,12 @@
 import os
 import re
+import requests
 import anthropic
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from dotenv import load_dotenv
-from notion_client import Client as NotionClient
 
 load_dotenv()
 
@@ -15,45 +15,62 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.environ["LINE_CHANNEL_ACCESS_TOKEN"])
 handler = WebhookHandler(os.environ["LINE_CHANNEL_SECRET"])
 anthropic_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5)
-notion = NotionClient(auth=os.environ["NOTION_INTERNAL_INTEGRATION_SECRET"])
+
+NOTION_TOKEN = os.environ["NOTION_INTERNAL_INTEGRATION_SECRET"]
 NOTION_DB_ID = os.environ["NOTION_DATABASE_ID"]
+NOTION_HEADERS = {
+    "Authorization": f"Bearer {NOTION_TOKEN}",
+    "Content-Type": "application/json",
+    "Notion-Version": "2022-06-28",
+}
 
 
 def notion_get(source_id):
-    """查詢 Notion 資料庫，回傳 {lang1, lang2} 或 None"""
-    res = notion.databases.query(
-        database_id=NOTION_DB_ID,
-        filter={"property": "source_id", "title": {"equals": source_id}},
-    )
-    if res["results"]:
-        props = res["results"][0]["properties"]
+    url = f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query"
+    payload = {"filter": {"property": "source_id", "title": {"equals": source_id}}}
+    res = requests.post(url, headers=NOTION_HEADERS, json=payload)
+    results = res.json().get("results", [])
+    if results:
+        props = results[0]["properties"]
+        lang1_list = props["lang1"]["rich_text"]
+        lang2_list = props["lang2"]["rich_text"]
         return {
-            "lang1": props["lang1"]["rich_text"][0]["plain_text"],
-            "lang2": props["lang2"]["rich_text"][0]["plain_text"],
-            "page_id": res["results"][0]["id"],
+            "lang1": lang1_list[0]["plain_text"] if lang1_list else "",
+            "lang2": lang2_list[0]["plain_text"] if lang2_list else "",
+            "page_id": results[0]["id"],
         }
     return None
 
 
 def notion_set(source_id, lang1, lang2):
-    """新增或更新 Notion 資料庫中的設定"""
-    existing = notion_get(source_id)
     properties = {
         "source_id": {"title": [{"text": {"content": source_id}}]},
         "lang1": {"rich_text": [{"text": {"content": lang1}}]},
         "lang2": {"rich_text": [{"text": {"content": lang2}}]},
     }
+    existing = notion_get(source_id)
     if existing:
-        notion.pages.update(page_id=existing["page_id"], properties=properties)
+        requests.patch(
+            f"https://api.notion.com/v1/pages/{existing['page_id']}",
+            headers=NOTION_HEADERS,
+            json={"properties": properties},
+        )
     else:
-        notion.pages.create(parent={"database_id": NOTION_DB_ID}, properties=properties)
+        requests.post(
+            "https://api.notion.com/v1/pages",
+            headers=NOTION_HEADERS,
+            json={"parent": {"database_id": NOTION_DB_ID}, "properties": properties},
+        )
 
 
 def notion_delete(source_id):
-    """將 Notion 資料庫中的頁面封存（等同刪除）"""
     existing = notion_get(source_id)
     if existing:
-        notion.pages.update(page_id=existing["page_id"], archived=True)
+        requests.patch(
+            f"https://api.notion.com/v1/pages/{existing['page_id']}",
+            headers=NOTION_HEADERS,
+            json={"archived": True},
+        )
         return True
     return False
 

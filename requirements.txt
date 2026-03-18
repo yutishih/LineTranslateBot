@@ -2,4 +2,4 @@ flask
 line-bot-sdk
 anthropic
 python-dotenv
-notion-client>=2.0.0
+requests
