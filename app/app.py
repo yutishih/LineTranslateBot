@@ -1,10 +1,12 @@
 import os
+import re
 import anthropic
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from dotenv import load_dotenv
+from notion_client import Client as NotionClient
 
 load_dotenv()
 
@@ -13,9 +15,47 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(os.environ["LINE_CHANNEL_ACCESS_TOKEN"])
 handler = WebhookHandler(os.environ["LINE_CHANNEL_SECRET"])
 anthropic_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5)
+notion = NotionClient(auth=os.environ["NOTION_INTERNAL_INTEGRATION_SECRET"])
+NOTION_DB_ID = os.environ["NOTION_DATABASE_ID"]
 
-# In-memory storage: key = source ID (group/room/user), value = {"lang1": ..., "lang2": ...}
-language_settings = {}
+
+def notion_get(source_id):
+    """查詢 Notion 資料庫，回傳 {lang1, lang2} 或 None"""
+    res = notion.databases.query(
+        database_id=NOTION_DB_ID,
+        filter={"property": "source_id", "title": {"equals": source_id}},
+    )
+    if res["results"]:
+        props = res["results"][0]["properties"]
+        return {
+            "lang1": props["lang1"]["rich_text"][0]["plain_text"],
+            "lang2": props["lang2"]["rich_text"][0]["plain_text"],
+            "page_id": res["results"][0]["id"],
+        }
+    return None
+
+
+def notion_set(source_id, lang1, lang2):
+    """新增或更新 Notion 資料庫中的設定"""
+    existing = notion_get(source_id)
+    properties = {
+        "source_id": {"title": [{"text": {"content": source_id}}]},
+        "lang1": {"rich_text": [{"text": {"content": lang1}}]},
+        "lang2": {"rich_text": [{"text": {"content": lang2}}]},
+    }
+    if existing:
+        notion.pages.update(page_id=existing["page_id"], properties=properties)
+    else:
+        notion.pages.create(parent={"database_id": NOTION_DB_ID}, properties=properties)
+
+
+def notion_delete(source_id):
+    """將 Notion 資料庫中的頁面封存（等同刪除）"""
+    existing = notion_get(source_id)
+    if existing:
+        notion.pages.update(page_id=existing["page_id"], archived=True)
+        return True
+    return False
 
 
 def get_source_id(event):
@@ -79,11 +119,10 @@ def handle_message(event):
     if text.lower().startswith("/setlang "):
         arg = text[len("/setlang "):].strip()
         # 支援空白、全形逗號、半形逗號作為分隔符
-        import re
         parts = re.split(r"[，,\s]+", arg, maxsplit=1)
         if len(parts) == 2 and parts[0] and parts[1]:
             lang1, lang2 = parts[0].strip(), parts[1].strip()
-            language_settings[source_id] = {"lang1": lang1, "lang2": lang2}
+            notion_set(source_id, lang1, lang2)
             reply = (
                 f"✅ 翻譯語言設定成功！\n"
                 f"🔤 語言1：{lang1}\n"
@@ -101,8 +140,8 @@ def handle_message(event):
 
     # /status — 查看目前設定
     if text.lower() == "/status":
-        if source_id in language_settings:
-            s = language_settings[source_id]
+        s = notion_get(source_id)
+        if s:
             reply = (
                 f"📊 目前翻譯設定\n"
                 f"🔤 語言1：{s['lang1']}\n"
@@ -115,8 +154,7 @@ def handle_message(event):
 
     # /stop — 停止翻譯
     if text.lower() == "/stop":
-        if source_id in language_settings:
-            del language_settings[source_id]
+        if notion_delete(source_id):
             reply = "🛑 已停止翻譯"
         else:
             reply = "⚠️ 翻譯尚未啟動"
@@ -141,7 +179,8 @@ def handle_message(event):
         return
 
     # 一般訊息 — 如果有設定語言則自動翻譯
-    if source_id not in language_settings:
+    s = notion_get(source_id)
+    if s is None:
         reply = (
             "⚠️ 請設置語言\n\n"
             "📖 LINE 翻譯機器人\n\n"
@@ -158,8 +197,7 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
-    if source_id in language_settings:
-        s = language_settings[source_id]
+    if s:
         try:
             result = translate(text, s["lang1"], s["lang2"])
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=result))
