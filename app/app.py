@@ -28,11 +28,24 @@ def get_source_id(event):
 
 
 def translate(text, lang1, lang2):
+    def resolve_chinese(lang):
+        simplified_keywords = ("簡體", "简体", "Simplified", "簡中", "简中")
+        if any(k in lang for k in simplified_keywords):
+            return "Simplified Chinese (簡體中文)"
+        if lang in ("中文", "Chinese", "CH", "ch", "ZH", "zh", "繁體", "繁體中文", "繁中",
+                    "Traditional Chinese", "Mandarin", "mandarin") or \
+           "中文" in lang:
+            return "Traditional Chinese (繁體中文)"
+        return lang
+
+    resolved_lang1 = resolve_chinese(lang1)
+    resolved_lang2 = resolve_chinese(lang2)
+
     prompt = (
-        f"You are a bilingual translator between {lang1} and {lang2}.\n"
+        f"You are a bilingual translator between {resolved_lang1} and {resolved_lang2}.\n"
         f"Detect the language of the following text.\n"
-        f"If it is {lang1}, translate it into {lang2}.\n"
-        f"If it is {lang2}, translate it into {lang1}.\n"
+        f"If it is {resolved_lang1}, translate it into {resolved_lang2}.\n"
+        f"If it is {resolved_lang2}, translate it into {resolved_lang1}.\n"
         f"If the text is not in either language, reply exactly with: "
         f"⚠️ 無法識別語言，請確認設定的語言是否正確。\n"
         f"Output only the translation, no explanations.\n\n"
