@@ -1,5 +1,6 @@
 import os
 import re
+import threading
 import requests
 import anthropic
 from flask import Flask, request, abort
@@ -84,6 +85,15 @@ def get_source_id(event):
     return f"user_{source.user_id}"
 
 
+def get_push_target(event):
+    source = event.source
+    if source.type == "group":
+        return source.group_id
+    elif source.type == "room":
+        return source.room_id
+    return source.user_id
+
+
 def translate(text, lang1, lang2):
     def resolve_chinese(lang):
         simplified_keywords = ("簡體", "简体", "Simplified", "簡中", "简中")
@@ -99,14 +109,13 @@ def translate(text, lang1, lang2):
     resolved_lang2 = resolve_chinese(lang2)
 
     prompt = (
-        f"You are a bilingual translator between {resolved_lang1} and {resolved_lang2}.\n"
-        f"Detect the language of the following text.\n"
-        f"If it is {resolved_lang1}, translate it into {resolved_lang2}.\n"
-        f"If it is {resolved_lang2}, translate it into {resolved_lang1}.\n"
-        f"If the text is not in either language, reply exactly with: "
-        f"⚠️ 無法識別語言，請確認設定的語言是否正確。\n"
-        f"Output only the translation, no explanations.\n\n"
-        f"Text:\n{text}"
+        f"Translate the following text between {resolved_lang1} and {resolved_lang2}.\n"
+        f"Rules:\n"
+        f"1. If the text is in {resolved_lang1}, output only its {resolved_lang2} translation.\n"
+        f"2. If the text is in {resolved_lang2}, output only its {resolved_lang1} translation.\n"
+        f"3. If the text is in neither language, output exactly: ⚠️ 無法識別語言，請確認設定的語言是否正確。\n"
+        f"4. Output ONLY the translated text. No language identification, no explanations, no notes, no extra context whatsoever.\n\n"
+        f"Text to translate:\n{text}"
     )
     message = anthropic_client.messages.create(
         model="claude-opus-4-5",
@@ -129,8 +138,13 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
+    threading.Thread(target=_process_message, args=(event,), daemon=True).start()
+
+
+def _process_message(event):
     text = event.message.text.strip()
     source_id = get_source_id(event)
+    push_target = get_push_target(event)
 
     # /setlang <語言1> <語言2>
     if text.lower().startswith("/setlang "):
@@ -217,16 +231,16 @@ def handle_message(event):
     if s:
         try:
             result = translate(text, s["lang1"], s["lang2"])
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=result))
+            line_bot_api.push_message(push_target, TextSendMessage(text=result))
         except anthropic.APIStatusError as e:
             if e.status_code >= 500:
                 msg = "❌ 翻譯服務暫時無法使用，請稍後再試"
             else:
                 msg = f"❌ 翻譯失敗：{e.message}"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
+            line_bot_api.push_message(push_target, TextSendMessage(text=msg))
         except Exception as e:
-            line_bot_api.reply_message(
-                event.reply_token,
+            line_bot_api.push_message(
+                push_target,
                 TextSendMessage(text=f"❌ 翻譯失敗：{e}"),
             )
 
