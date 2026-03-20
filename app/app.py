@@ -1,6 +1,5 @@
 import os
 import re
-import threading
 import requests
 import anthropic
 from flask import Flask, request, abort
@@ -118,7 +117,7 @@ def translate(text, lang1, lang2):
         f"Text to translate:\n{text}"
     )
     message = anthropic_client.messages.create(
-        model="claude-opus-4-5",
+        model="claude-sonnet-4-6",
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -138,10 +137,6 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    threading.Thread(target=_process_message, args=(event,), daemon=True).start()
-
-
-def _process_message(event):
     text = event.message.text.strip()
     source_id = get_source_id(event)
     push_target = get_push_target(event)
