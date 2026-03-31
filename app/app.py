@@ -33,8 +33,7 @@ def notion_get(source_id):
     payload = {
         "filter": {
             "property": "source_id",
-            "value": source_id,
-            "type": "title"
+            "rich_text": {"equals": source_id}
         }
     }
     res = requests.patch(url, headers=NOTION_HEADERS, json=payload)
@@ -53,7 +52,7 @@ def notion_get(source_id):
 
 def notion_set(source_id, lang1, lang2):
     properties = {
-        "source_id": {"title": [{"text": {"content": source_id}}]},
+        "source_id": {"rich_text": [{"text": {"content": source_id}}]},
         "lang1": {"rich_text": [{"text": {"content": lang1}}]},
         "lang2": {"rich_text": [{"text": {"content": lang2}}]},
     }
