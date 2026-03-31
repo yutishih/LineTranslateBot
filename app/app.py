@@ -36,7 +36,21 @@ def notion_get(source_id):
             "rich_text": {"equals": source_id}
         }
     }
+    debug_msg = f"[notion_get] payload: {payload}"
+    try:
+        from linebot.models import TextSendMessage
+        # 這裡假設 source_id 就是 user_id 或 group_id
+        debug_target = source_id if source_id.startswith("user_") or source_id.startswith("group_") else None
+    except Exception:
+        debug_target = None
     res = requests.patch(url, headers=NOTION_HEADERS, json=payload)
+    debug_msg2 = f"[notion_get] response: {res.status_code} {res.text}"
+    if debug_target:
+        try:
+            line_bot_api.push_message(debug_target.replace("user_", "").replace("group_", ""), TextSendMessage(text=debug_msg[:1000]))
+            line_bot_api.push_message(debug_target.replace("user_", "").replace("group_", ""), TextSendMessage(text=debug_msg2[:1000]))
+        except Exception as e:
+            pass
     results = res.json().get("results", [])
     if results:
         props = results[0]["properties"]
