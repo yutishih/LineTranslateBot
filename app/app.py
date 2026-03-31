@@ -98,9 +98,10 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
                         next_serial = 1
                 else:
                     next_serial = 1
-                    serial_type = "number"
+                    serial_type = "title"
             except Exception:
                 next_serial = 1
+                serial_type = "title"
 
             # 建立頁面（包含 date 與 sysSerial）；根據偵測到的 serial_type 選擇正確格式
             date_iso = datetime.date.today().isoformat()
