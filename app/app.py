@@ -43,7 +43,7 @@ def notion_get(source_id):
         debug_target = source_id if source_id.startswith("user_") or source_id.startswith("group_") else None
     except Exception:
         debug_target = None
-    res = requests.patch(url, headers=NOTION_HEADERS, json=payload)
+    res = requests.post(url, headers=NOTION_HEADERS, json=payload)
     debug_msg2 = f"[notion_get] response: {res.status_code} {res.text}"
     if debug_target:
         try:
