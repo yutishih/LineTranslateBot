@@ -37,7 +37,7 @@ def notion_get(source_id):
             "type": "title"
         }
     }
-    res = requests.post(url, headers=NOTION_HEADERS, json=payload)
+    res = requests.patch(url, headers=NOTION_HEADERS, json=payload)
     results = res.json().get("results", [])
     if results:
         props = results[0]["properties"]
