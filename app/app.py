@@ -65,11 +65,17 @@ def notion_set(source_id, lang1, lang2):
             json={"properties": properties},
         )
     else:
-        # 2025-09-03: 改用 data source 新增
+        # 2025-09-03: 新增 page 時 parent 需用 data_source_id
         requests.post(
-            f"https://api.notion.com/v1/data_sources/{NOTION_DATA_SOURCE_ID}/pages",
+            "https://api.notion.com/v1/pages",
             headers=NOTION_HEADERS,
-            json={"properties": properties},
+            json={
+                "parent": {
+                    "type": "data_source_id",
+                    "data_source_id": NOTION_DATA_SOURCE_ID
+                },
+                "properties": properties
+            },
         )
 
 
