@@ -205,7 +205,7 @@ def handle_message(event):
                 }
             }
             debug_msgs.append(f"[notion_get] payload: {payload}")
-            res = requests.patch(url, headers=NOTION_HEADERS, json=payload)
+            res = requests.post(url, headers=NOTION_HEADERS, json=payload)
             debug_msgs.append(f"[notion_get] response: {res.status_code} {res.text[:500]}")
             results = res.json().get("results", [])
             if results:
