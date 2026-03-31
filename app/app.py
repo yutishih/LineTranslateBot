@@ -2,6 +2,7 @@ import os
 import re
 import requests
 import anthropic
+import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
@@ -36,21 +37,7 @@ def notion_get(source_id):
             "rich_text": {"equals": source_id}
         }
     }
-    debug_msg = f"[notion_get] payload: {payload}"
-    try:
-        from linebot.models import TextSendMessage
-        # 這裡假設 source_id 就是 user_id 或 group_id
-        debug_target = source_id if source_id.startswith("user_") or source_id.startswith("group_") else None
-    except Exception:
-        debug_target = None
     res = requests.post(url, headers=NOTION_HEADERS, json=payload)
-    debug_msg2 = f"[notion_get] response: {res.status_code} {res.text}"
-    if debug_target:
-        try:
-            line_bot_api.push_message(debug_target.replace("user_", "").replace("group_", ""), TextSendMessage(text=debug_msg[:1000]))
-            line_bot_api.push_message(debug_target.replace("user_", "").replace("group_", ""), TextSendMessage(text=debug_msg2[:1000]))
-        except Exception as e:
-            pass
     results = res.json().get("results", [])
     if results:
         props = results[0]["properties"]
@@ -78,18 +65,112 @@ def notion_set(source_id, lang1, lang2):
             json={"properties": properties},
         )
     else:
-        # 2025-09-03: 新增 page 時 parent 需用 data_source_id
-        requests.post(
-            "https://api.notion.com/v1/pages",
-            headers=NOTION_HEADERS,
-            json={
-                "parent": {
-                    "type": "data_source_id",
-                    "data_source_id": NOTION_DATA_SOURCE_ID
+        # 嘗試建立新 page，加入簡單重試與衝突檢查（避免序號重複）
+        url = f"https://api.notion.com/v1/data_sources/{NOTION_DATA_SOURCE_ID}/query"
+        max_attempts = 5
+        attempt = 0
+        created_page_id = None
+        next_serial = 1
+        while attempt < max_attempts:
+            attempt += 1
+            # 取得目前最大 sysSerial
+            try:
+                payload = {"sorts": [{"property": "sysSerial", "direction": "descending"}], "page_size": 1}
+                r = requests.post(url, headers=NOTION_HEADERS, json=payload)
+                results = r.json().get("results", [])
+                if results:
+                    p = results[0].get("properties", {})
+                    s_prop = p.get("sysSerial", {})
+                    serial_val = None
+                    if "title" in s_prop and s_prop.get("title"):
+                        serial_val = s_prop["title"][0].get("plain_text") or s_prop["title"][0].get("text", {}).get("content")
+                    elif "rich_text" in s_prop and s_prop.get("rich_text"):
+                        serial_val = s_prop["rich_text"][0].get("plain_text")
+                    elif "number" in s_prop and s_prop.get("number") is not None:
+                        serial_val = str(s_prop.get("number"))
+                    try:
+                        next_serial = int(serial_val) + 1 if serial_val is not None else 1
+                    except Exception:
+                        next_serial = 1
+                else:
+                    next_serial = 1
+            except Exception:
+                next_serial = 1
+
+            # 建立頁面（包含 Date 與 sysSerial）
+            date_iso = datetime.date.today().isoformat()
+            properties["sysSerial"] = {"title": [{"text": {"content": str(next_serial)}}]}
+            properties["Date"] = {"date": {"start": date_iso}}
+
+            create_resp = requests.post(
+                "https://api.notion.com/v1/pages",
+                headers=NOTION_HEADERS,
+                json={
+                    "parent": {
+                        "type": "data_source_id",
+                        "data_source_id": NOTION_DATA_SOURCE_ID
+                    },
+                    "properties": properties
                 },
-                "properties": properties
-            },
-        )
+            )
+
+            if create_resp.status_code not in (200, 201):
+                # 嘗試重試
+                continue
+
+            created = create_resp.json()
+            created_page_id = created.get("id")
+
+            # 檢查是否有重複使用相同 sysSerial 的頁面
+            try:
+                # 先嘗試以 filter 查詢
+                chk_payload = {"filter": {"property": "sysSerial", "rich_text": {"equals": str(next_serial)}} , "page_size": 100}
+                chk_r = requests.post(url, headers=NOTION_HEADERS, json=chk_payload)
+                chk_results = chk_r.json().get("results", [])
+            except Exception:
+                chk_results = []
+
+            # 若 filter 查不到，再以最近的 100 筆檢查（fallback）
+            if not chk_results:
+                try:
+                    fallback_payload = {"sorts": [{"property": "sysSerial", "direction": "descending"}], "page_size": 100}
+                    fb_r = requests.post(url, headers=NOTION_HEADERS, json=fallback_payload)
+                    chk_results = fb_r.json().get("results", [])
+                except Exception:
+                    chk_results = []
+
+            # 計算相同序號數量
+            same_count = 0
+            for res in chk_results:
+                props_r = res.get("properties", {})
+                s_prop_r = props_r.get("sysSerial", {})
+                val = None
+                if "title" in s_prop_r and s_prop_r.get("title"):
+                    val = s_prop_r["title"][0].get("plain_text") or s_prop_r["title"][0].get("text", {}).get("content")
+                elif "rich_text" in s_prop_r and s_prop_r.get("rich_text"):
+                    val = s_prop_r["rich_text"][0].get("plain_text")
+                elif "number" in s_prop_r and s_prop_r.get("number") is not None:
+                    val = str(s_prop_r.get("number"))
+                if val is not None and str(val) == str(next_serial):
+                    same_count += 1
+
+            if same_count <= 1:
+                # 成功（沒有或只有自己）
+                break
+
+            # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
+            try:
+                next_serial += 1
+                patch_props = {"sysSerial": {"title": [{"text": {"content": str(next_serial)}}]}}
+                requests.patch(f"https://api.notion.com/v1/pages/{created_page_id}", headers=NOTION_HEADERS, json={"properties": patch_props})
+            except Exception:
+                # 若無法 patch，繼續下一次嘗試（下次會重新計算）
+                pass
+
+        # 迴圈結束：若仍未建立 page id，視為建立失敗
+        if not created_page_id:
+            # 無法建立頁面，直接回傳（上層會處理錯誤）
+            return
 
 
 def notion_delete(source_id):
@@ -195,30 +276,7 @@ def handle_message(event):
 
     # /status — 查看目前設定
     if text.lower() == "/status":
-        debug_msgs = []
-        def notion_get_debug(source_id):
-            url = f"https://api.notion.com/v1/data_sources/{NOTION_DATA_SOURCE_ID}/query"
-            payload = {
-                "filter": {
-                    "property": "source_id",
-                    "rich_text": {"equals": source_id}
-                }
-            }
-            debug_msgs.append(f"[notion_get] payload: {payload}")
-            res = requests.post(url, headers=NOTION_HEADERS, json=payload)
-            debug_msgs.append(f"[notion_get] response: {res.status_code} {res.text[:500]}")
-            results = res.json().get("results", [])
-            if results:
-                props = results[0]["properties"]
-                lang1_list = props["lang1"]["rich_text"]
-                lang2_list = props["lang2"]["rich_text"]
-                return {
-                    "lang1": lang1_list[0]["plain_text"] if lang1_list else "",
-                    "lang2": lang2_list[0]["plain_text"] if lang2_list else "",
-                    "page_id": results[0]["id"],
-                }
-            return None
-        s = notion_get_debug(source_id)
+        s = notion_get(source_id)
         if s:
             reply = (
                 f"📊 目前翻譯設定\n"
@@ -227,11 +285,7 @@ def handle_message(event):
             )
         else:
             reply = "⚠️ 尚未設定翻譯語言\n請使用 /setlang 指令設定"
-        # 回傳 debug log
-        reply_msgs = [TextSendMessage(text=reply)]
-        for msg in debug_msgs:
-            reply_msgs.append(TextSendMessage(text=msg[:1000]))
-        line_bot_api.reply_message(event.reply_token, reply_msgs)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
     # /stop — 停止翻譯
