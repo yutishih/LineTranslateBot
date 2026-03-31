@@ -136,10 +136,6 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
 
             created = create_resp.json()
             created_page_id = created.get("id")
-            try:
-                push_log_to_source(source_id, f"Created Notion page {created_page_id} with sysSerial {next_serial} (attempt {attempt}).", reply_token=reply_token)
-            except Exception:
-                pass
 
             # 檢查是否有重複使用相同 sysSerial 的頁面
             try:
@@ -187,16 +183,12 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
 
             if same_count <= 1:
                 # 成功（沒有或只有自己）
-                try:
-                    push_log_to_source(source_id, f"sysSerial {next_serial} assigned OK (found {same_count} entries).", reply_token=reply_token)
-                except Exception:
-                    pass
                 break
 
             # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
             try:
                 # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
-                push_log_to_source(source_id, f"Conflict detected for sysSerial {next_serial} ({same_count} pages). Incrementing to try to resolve.", reply_token=reply_token)
+                pass
             except Exception:
                 pass
             try:
