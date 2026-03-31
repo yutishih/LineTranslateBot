@@ -17,17 +17,26 @@ handler = WebhookHandler(os.environ["LINE_CHANNEL_SECRET"])
 anthropic_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=5)
 
 NOTION_TOKEN = os.environ["NOTION_INTERNAL_INTEGRATION_SECRET"]
-NOTION_DB_ID = os.environ["NOTION_DATABASE_ID"]
+
+# 新版 Notion Data Source 架構
+NOTION_DATA_SOURCE_ID = os.environ["NOTION_DATA_SOURCE_ID"]
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
-    "Notion-Version": "2022-06-28",
+    "Notion-Version": "2025-09-03",
 }
 
 
 def notion_get(source_id):
-    url = f"https://api.notion.com/v1/databases/{NOTION_DB_ID}/query"
-    payload = {"filter": {"property": "source_id", "title": {"equals": source_id}}}
+    # 2025-09-03: 改用 data source 查詢
+    url = f"https://api.notion.com/v1/data_sources/{NOTION_DATA_SOURCE_ID}/query"
+    payload = {
+        "filter": {
+            "property": "source_id",
+            "value": source_id,
+            "type": "title"
+        }
+    }
     res = requests.post(url, headers=NOTION_HEADERS, json=payload)
     results = res.json().get("results", [])
     if results:
@@ -56,10 +65,11 @@ def notion_set(source_id, lang1, lang2):
             json={"properties": properties},
         )
     else:
+        # 2025-09-03: 改用 data source 新增
         requests.post(
-            "https://api.notion.com/v1/pages",
+            f"https://api.notion.com/v1/data_sources/{NOTION_DATA_SOURCE_ID}/pages",
             headers=NOTION_HEADERS,
-            json={"parent": {"database_id": NOTION_DB_ID}, "properties": properties},
+            json={"properties": properties},
         )
 
 
