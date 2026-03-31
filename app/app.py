@@ -195,7 +195,30 @@ def handle_message(event):
 
     # /status — 查看目前設定
     if text.lower() == "/status":
-        s = notion_get(source_id)
+        debug_msgs = []
+        def notion_get_debug(source_id):
+            url = f"https://api.notion.com/v1/data_sources/{NOTION_DATA_SOURCE_ID}/query"
+            payload = {
+                "filter": {
+                    "property": "source_id",
+                    "rich_text": {"equals": source_id}
+                }
+            }
+            debug_msgs.append(f"[notion_get] payload: {payload}")
+            res = requests.patch(url, headers=NOTION_HEADERS, json=payload)
+            debug_msgs.append(f"[notion_get] response: {res.status_code} {res.text[:500]}")
+            results = res.json().get("results", [])
+            if results:
+                props = results[0]["properties"]
+                lang1_list = props["lang1"]["rich_text"]
+                lang2_list = props["lang2"]["rich_text"]
+                return {
+                    "lang1": lang1_list[0]["plain_text"] if lang1_list else "",
+                    "lang2": lang2_list[0]["plain_text"] if lang2_list else "",
+                    "page_id": results[0]["id"],
+                }
+            return None
+        s = notion_get_debug(source_id)
         if s:
             reply = (
                 f"📊 目前翻譯設定\n"
@@ -204,7 +227,11 @@ def handle_message(event):
             )
         else:
             reply = "⚠️ 尚未設定翻譯語言\n請使用 /setlang 指令設定"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        # 回傳 debug log
+        reply_msgs = [TextSendMessage(text=reply)]
+        for msg in debug_msgs:
+            reply_msgs.append(TextSendMessage(text=msg[:1000]))
+        line_bot_api.reply_message(event.reply_token, reply_msgs)
         return
 
     # /stop — 停止翻譯
