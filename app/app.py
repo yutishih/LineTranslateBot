@@ -78,29 +78,40 @@ def notion_set(source_id, lang1, lang2):
                 payload = {"sorts": [{"property": "sysSerial", "direction": "descending"}], "page_size": 1}
                 r = requests.post(url, headers=NOTION_HEADERS, json=payload)
                 results = r.json().get("results", [])
+                serial_type = None
                 if results:
                     p = results[0].get("properties", {})
                     s_prop = p.get("sysSerial", {})
                     serial_val = None
                     if "title" in s_prop and s_prop.get("title"):
                         serial_val = s_prop["title"][0].get("plain_text") or s_prop["title"][0].get("text", {}).get("content")
+                        serial_type = "title"
                     elif "rich_text" in s_prop and s_prop.get("rich_text"):
                         serial_val = s_prop["rich_text"][0].get("plain_text")
+                        serial_type = "rich_text"
                     elif "number" in s_prop and s_prop.get("number") is not None:
                         serial_val = str(s_prop.get("number"))
+                        serial_type = "number"
                     try:
                         next_serial = int(serial_val) + 1 if serial_val is not None else 1
                     except Exception:
                         next_serial = 1
                 else:
                     next_serial = 1
+                    serial_type = "number"
             except Exception:
                 next_serial = 1
 
-            # 建立頁面（包含 Date 與 sysSerial）
+            # 建立頁面（包含 date 與 sysSerial）；根據偵測到的 serial_type 選擇正確格式
             date_iso = datetime.date.today().isoformat()
-            properties["sysSerial"] = {"title": [{"text": {"content": str(next_serial)}}]}
-            properties["Date"] = {"date": {"start": date_iso}}
+            if serial_type == "number":
+                properties["sysSerial"] = {"number": next_serial}
+            elif serial_type == "rich_text":
+                properties["sysSerial"] = {"rich_text": [{"text": {"content": str(next_serial)}}]}
+            else:
+                # default/title
+                properties["sysSerial"] = {"title": [{"text": {"content": str(next_serial)}}]}
+            properties["date"] = {"date": {"start": date_iso}}
 
             create_resp = requests.post(
                 "https://api.notion.com/v1/pages",
@@ -115,11 +126,19 @@ def notion_set(source_id, lang1, lang2):
             )
 
             if create_resp.status_code not in (200, 201):
-                # 嘗試重試
+                # 嘗試重試，並回傳 log
+                try:
+                    push_log_to_source(source_id, f"Notion create failed (status {create_resp.status_code}). Attempt {attempt}.")
+                except Exception:
+                    pass
                 continue
 
             created = create_resp.json()
             created_page_id = created.get("id")
+            try:
+                push_log_to_source(source_id, f"Created Notion page {created_page_id} with sysSerial {next_serial} (attempt {attempt}).")
+            except Exception:
+                pass
 
             # 檢查是否有重複使用相同 sysSerial 的頁面
             try:
@@ -156,12 +175,27 @@ def notion_set(source_id, lang1, lang2):
 
             if same_count <= 1:
                 # 成功（沒有或只有自己）
+                try:
+                    push_log_to_source(source_id, f"sysSerial {next_serial} assigned OK (found {same_count} entries).")
+                except Exception:
+                    pass
                 break
 
             # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
             try:
+                # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
+                push_log_to_source(source_id, f"Conflict detected for sysSerial {next_serial} ({same_count} pages). Incrementing to try to resolve.")
+            except Exception:
+                pass
+            try:
                 next_serial += 1
-                patch_props = {"sysSerial": {"title": [{"text": {"content": str(next_serial)}}]}}
+                # 依照目前 serial_type 更新格式
+                if serial_type == "number":
+                    patch_props = {"sysSerial": {"number": next_serial}}
+                elif serial_type == "rich_text":
+                    patch_props = {"sysSerial": {"rich_text": [{"text": {"content": str(next_serial)}}]}}
+                else:
+                    patch_props = {"sysSerial": {"title": [{"text": {"content": str(next_serial)}}]}}
                 requests.patch(f"https://api.notion.com/v1/pages/{created_page_id}", headers=NOTION_HEADERS, json={"properties": patch_props})
             except Exception:
                 # 若無法 patch，繼續下一次嘗試（下次會重新計算）
@@ -169,7 +203,12 @@ def notion_set(source_id, lang1, lang2):
 
         # 迴圈結束：若仍未建立 page id，視為建立失敗
         if not created_page_id:
-            # 無法建立頁面，直接回傳（上層會處理錯誤）
+            # 無法建立頁面，回報給來源
+            try:
+                push_log_to_source(source_id, f"Failed to create Notion page after {max_attempts} attempts.")
+            except Exception:
+                pass
+            # 直接回傳（上層會處理錯誤）
             return
 
 
@@ -201,6 +240,18 @@ def get_push_target(event):
     elif source.type == "room":
         return source.room_id
     return source.user_id
+
+
+def push_log_to_source(source_id, text):
+    """Send a log message to the source (user/group/room) via LINE push_message.
+    Silently ignore failures to avoid breaking main flow."""
+    try:
+        target = source_id
+        if source_id.startswith("user_") or source_id.startswith("group_") or source_id.startswith("room_"):
+            target = source_id.replace("user_", "").replace("group_", "").replace("room_", "")
+        line_bot_api.push_message(target, TextSendMessage(text=text))
+    except Exception:
+        pass
 
 
 def translate(text, lang1, lang2):
