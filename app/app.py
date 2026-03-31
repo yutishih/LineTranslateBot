@@ -129,8 +129,7 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
             if create_resp.status_code not in (200, 201):
                 # 嘗試重試，並回傳 log（包含 Notion 回應前 1000 字）
                 try:
-                    resp_text = getattr(create_resp, "text", "")[:1000]
-                    push_log_to_source(source_id, f"Notion create failed (status {create_resp.status_code}). Attempt {attempt}. Response: {resp_text}", reply_token=reply_token)
+                    push_log_to_source(source_id, f"Notion create failed (status {create_resp.status_code}). Attempt {attempt}.", reply_token=reply_token)
                 except Exception:
                     pass
                 continue
@@ -138,8 +137,7 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
             created = create_resp.json()
             created_page_id = created.get("id")
             try:
-                resp_text = getattr(create_resp, "text", "")[:1000]
-                push_log_to_source(source_id, f"Created Notion page {created_page_id} with sysSerial {next_serial} (attempt {attempt}). Response: {resp_text}", reply_token=reply_token)
+                push_log_to_source(source_id, f"Created Notion page {created_page_id} with sysSerial {next_serial} (attempt {attempt}).", reply_token=reply_token)
             except Exception:
                 pass
 
@@ -151,7 +149,7 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
                 # 若非 200/201，記錄回應
                 if chk_r.status_code not in (200,201):
                     try:
-                        push_log_to_source(source_id, f"Notion filter query returned status {chk_r.status_code}. Response: {getattr(chk_r, 'text', '')[:1000]}", reply_token=reply_token)
+                        push_log_to_source(source_id, f"Notion filter query returned status {chk_r.status_code}.", reply_token=reply_token)
                     except Exception:
                         pass
                 chk_results = chk_r.json().get("results", [])
@@ -165,7 +163,7 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
                     fb_r = requests.post(url, headers=NOTION_HEADERS, json=fallback_payload)
                     if fb_r.status_code not in (200,201):
                         try:
-                            push_log_to_source(source_id, f"Notion fallback query returned status {fb_r.status_code}. Response: {getattr(fb_r, 'text', '')[:1000]}", reply_token=reply_token)
+                            push_log_to_source(source_id, f"Notion fallback query returned status {fb_r.status_code}.", reply_token=reply_token)
                         except Exception:
                             pass
                     chk_results = fb_r.json().get("results", [])
@@ -196,11 +194,11 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
                 break
 
             # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
-                try:
-                    # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
-                    push_log_to_source(source_id, f"Conflict detected for sysSerial {next_serial} ({same_count} pages). Incrementing to try to resolve.", reply_token=reply_token)
-                except Exception:
-                    pass
+            try:
+                # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
+                push_log_to_source(source_id, f"Conflict detected for sysSerial {next_serial} ({same_count} pages). Incrementing to try to resolve.", reply_token=reply_token)
+            except Exception:
+                pass
             try:
                 next_serial += 1
                 # 依照目前 serial_type 更新格式
