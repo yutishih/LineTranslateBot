@@ -51,7 +51,7 @@ def notion_get(source_id):
     return None
 
 
-def notion_set(source_id, lang1, lang2):
+def notion_set(source_id, lang1, lang2, reply_token=None):
     properties = {
         "source_id": {"rich_text": [{"text": {"content": source_id}}]},
         "lang1": {"rich_text": [{"text": {"content": lang1}}]},
@@ -126,9 +126,10 @@ def notion_set(source_id, lang1, lang2):
             )
 
             if create_resp.status_code not in (200, 201):
-                # 嘗試重試，並回傳 log
+                # 嘗試重試，並回傳 log（包含 Notion 回應前 1000 字）
                 try:
-                    push_log_to_source(source_id, f"Notion create failed (status {create_resp.status_code}). Attempt {attempt}.")
+                    resp_text = getattr(create_resp, "text", "")[:1000]
+                    push_log_to_source(source_id, f"Notion create failed (status {create_resp.status_code}). Attempt {attempt}. Response: {resp_text}", reply_token=reply_token)
                 except Exception:
                     pass
                 continue
@@ -136,7 +137,8 @@ def notion_set(source_id, lang1, lang2):
             created = create_resp.json()
             created_page_id = created.get("id")
             try:
-                push_log_to_source(source_id, f"Created Notion page {created_page_id} with sysSerial {next_serial} (attempt {attempt}).")
+                resp_text = getattr(create_resp, "text", "")[:1000]
+                push_log_to_source(source_id, f"Created Notion page {created_page_id} with sysSerial {next_serial} (attempt {attempt}). Response: {resp_text}", reply_token=reply_token)
             except Exception:
                 pass
 
@@ -145,6 +147,12 @@ def notion_set(source_id, lang1, lang2):
                 # 先嘗試以 filter 查詢
                 chk_payload = {"filter": {"property": "sysSerial", "rich_text": {"equals": str(next_serial)}} , "page_size": 100}
                 chk_r = requests.post(url, headers=NOTION_HEADERS, json=chk_payload)
+                # 若非 200/201，記錄回應
+                if chk_r.status_code not in (200,201):
+                    try:
+                        push_log_to_source(source_id, f"Notion filter query returned status {chk_r.status_code}. Response: {getattr(chk_r, 'text', '')[:1000]}", reply_token=reply_token)
+                    except Exception:
+                        pass
                 chk_results = chk_r.json().get("results", [])
             except Exception:
                 chk_results = []
@@ -154,6 +162,11 @@ def notion_set(source_id, lang1, lang2):
                 try:
                     fallback_payload = {"sorts": [{"property": "sysSerial", "direction": "descending"}], "page_size": 100}
                     fb_r = requests.post(url, headers=NOTION_HEADERS, json=fallback_payload)
+                    if fb_r.status_code not in (200,201):
+                        try:
+                            push_log_to_source(source_id, f"Notion fallback query returned status {fb_r.status_code}. Response: {getattr(fb_r, 'text', '')[:1000]}", reply_token=reply_token)
+                        except Exception:
+                            pass
                     chk_results = fb_r.json().get("results", [])
                 except Exception:
                     chk_results = []
@@ -176,17 +189,17 @@ def notion_set(source_id, lang1, lang2):
             if same_count <= 1:
                 # 成功（沒有或只有自己）
                 try:
-                    push_log_to_source(source_id, f"sysSerial {next_serial} assigned OK (found {same_count} entries).")
+                    push_log_to_source(source_id, f"sysSerial {next_serial} assigned OK (found {same_count} entries).", reply_token=reply_token)
                 except Exception:
                     pass
                 break
 
             # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
-            try:
-                # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
-                push_log_to_source(source_id, f"Conflict detected for sysSerial {next_serial} ({same_count} pages). Incrementing to try to resolve.")
-            except Exception:
-                pass
+                try:
+                    # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
+                    push_log_to_source(source_id, f"Conflict detected for sysSerial {next_serial} ({same_count} pages). Incrementing to try to resolve.", reply_token=reply_token)
+                except Exception:
+                    pass
             try:
                 next_serial += 1
                 # 依照目前 serial_type 更新格式
@@ -205,7 +218,7 @@ def notion_set(source_id, lang1, lang2):
         if not created_page_id:
             # 無法建立頁面，回報給來源
             try:
-                push_log_to_source(source_id, f"Failed to create Notion page after {max_attempts} attempts.")
+                push_log_to_source(source_id, f"Failed to create Notion page after {max_attempts} attempts.", reply_token=reply_token)
             except Exception:
                 pass
             # 直接回傳（上層會處理錯誤）
@@ -242,10 +255,17 @@ def get_push_target(event):
     return source.user_id
 
 
-def push_log_to_source(source_id, text):
-    """Send a log message to the source (user/group/room) via LINE push_message.
-    Silently ignore failures to avoid breaking main flow."""
+def push_log_to_source(source_id, text, reply_token=None):
+    """Send a log message to the source via LINE.
+
+    If `reply_token` is provided, use `reply_message` so the user sees it immediately in the conversation.
+    Otherwise fall back to `push_message` using the source_id (stripping known prefixes).
+    Silently ignore failures to avoid breaking main flow.
+    """
     try:
+        if reply_token:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=text))
+            return
         target = source_id
         if source_id.startswith("user_") or source_id.startswith("group_") or source_id.startswith("room_"):
             target = source_id.replace("user_", "").replace("group_", "").replace("room_", "")
@@ -309,7 +329,7 @@ def handle_message(event):
         parts = re.split(r"[，,\s]+", arg, maxsplit=1)
         if len(parts) == 2 and parts[0] and parts[1]:
             lang1, lang2 = parts[0].strip(), parts[1].strip()
-            notion_set(source_id, lang1, lang2)
+            notion_set(source_id, lang1, lang2, reply_token=event.reply_token)
             reply = (
                 f"✅ 翻譯語言設定成功！\n"
                 f"🔤 語言1：{lang1}\n"
