@@ -398,7 +398,7 @@ def handle_message(event):
     if s:
         try:
             result = translate(text, s["lang1"], s["lang2"])
-            line_bot_api.push_message(push_target, TextSendMessage(text=result))
+            line_bot_api.push_message(push_target, TextSendMessage(text=f"{text}\n{result}"))
         except LineBotApiError as e:
             if e.status_code == 429:
                 msg = "⚠️ LINE訊息額度已用完，本月無法繼續傳送翻譯結果。"
