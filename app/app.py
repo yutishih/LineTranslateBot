@@ -73,53 +73,35 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
         next_serial = 1
         while attempt < max_attempts:
             attempt += 1
-            # 取得目前最大 sysSerial
+            # 取得目前最大 sysSerial (title 欄位)
             try:
                 payload = {"sorts": [{"property": "sysSerial", "direction": "descending"}], "page_size": 1}
                 r = requests.post(url, headers=NOTION_HEADERS, json=payload)
                 results = r.json().get("results", [])
-                serial_type = None
                 if results:
-                    p = results[0].get("properties", {})
-                    s_prop = p.get("sysSerial", {})
+                    s_prop = results[0].get("properties", {}).get("sysSerial", {})
                     serial_val = None
-                    if "title" in s_prop and s_prop.get("title"):
-                        serial_val = s_prop["title"][0].get("plain_text") or s_prop["title"][0].get("text", {}).get("content")
-                        serial_type = "title"
-                    elif "rich_text" in s_prop and s_prop.get("rich_text"):
-                        serial_val = s_prop["rich_text"][0].get("plain_text")
-                        serial_type = "rich_text"
-                    elif "number" in s_prop and s_prop.get("number") is not None:
-                        serial_val = str(s_prop.get("number"))
-                        serial_type = "number"
+                    if s_prop.get("title"):
+                        serial_val = s_prop["title"][0].get("plain_text")
                     try:
                         next_serial = int(serial_val) + 1 if serial_val is not None else 1
                     except Exception:
                         next_serial = 1
                 else:
                     next_serial = 1
-                    serial_type = "title"
             except Exception:
                 next_serial = 1
-                serial_type = "title"
 
-            # 建立頁面（包含 date 與 sysSerial）；根據偵測到的 serial_type 選擇正確格式
+            # 建立頁面（sysSerial 為 title 欄位）
             date_iso = datetime.date.today().isoformat()
-            if serial_type == "number":
-                properties["sysSerial"] = {"number": next_serial}
-            elif serial_type == "rich_text":
-                properties["sysSerial"] = {"rich_text": [{"text": {"content": str(next_serial)}}]}
-            else:
-                # default/title
-                properties["sysSerial"] = {"title": [{"text": {"content": str(next_serial)}}]}
-            properties["date"] = {"date": {"start": date_iso}}
+            properties["sysSerial"] = {"title": [{"text": {"content": str(next_serial)}}]}
+            properties["Date"] = {"date": {"start": date_iso}}
 
             create_resp = requests.post(
                 "https://api.notion.com/v1/pages",
                 headers=NOTION_HEADERS,
                 json={
                     "parent": {
-                        "type": "data_source_id",
                         "data_source_id": NOTION_DATA_SOURCE_ID
                     },
                     "properties": properties
@@ -127,9 +109,9 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
             )
 
             if create_resp.status_code not in (200, 201):
-                # 嘗試重試，並回傳 log（包含 Notion 回應前 1000 字）
                 try:
-                    push_log_to_source(source_id, f"Notion create failed (status {create_resp.status_code}). Attempt {attempt}.", reply_token=reply_token)
+                    err_body = create_resp.text[:500]
+                    push_log_to_source(source_id, f"Notion create failed (status {create_resp.status_code}). Attempt {attempt}.\n{err_body}", reply_token=reply_token)
                 except Exception:
                     pass
                 continue
@@ -137,72 +119,23 @@ def notion_set(source_id, lang1, lang2, reply_token=None):
             created = create_resp.json()
             created_page_id = created.get("id")
 
-            # 檢查是否有重複使用相同 sysSerial 的頁面
+            # 檢查是否有重複 sysSerial（title 欄位用 title filter）
             try:
-                # 先嘗試以 filter 查詢
-                chk_payload = {"filter": {"property": "sysSerial", "rich_text": {"equals": str(next_serial)}} , "page_size": 100}
+                chk_payload = {"filter": {"property": "sysSerial", "title": {"equals": str(next_serial)}}, "page_size": 100}
                 chk_r = requests.post(url, headers=NOTION_HEADERS, json=chk_payload)
-                # 若非 200/201，記錄回應
-                if chk_r.status_code not in (200,201):
-                    try:
-                        push_log_to_source(source_id, f"Notion filter query returned status {chk_r.status_code}.", reply_token=reply_token)
-                    except Exception:
-                        pass
                 chk_results = chk_r.json().get("results", [])
             except Exception:
                 chk_results = []
 
-            # 若 filter 查不到，再以最近的 100 筆檢查（fallback）
-            if not chk_results:
-                try:
-                    fallback_payload = {"sorts": [{"property": "sysSerial", "direction": "descending"}], "page_size": 100}
-                    fb_r = requests.post(url, headers=NOTION_HEADERS, json=fallback_payload)
-                    if fb_r.status_code not in (200,201):
-                        try:
-                            push_log_to_source(source_id, f"Notion fallback query returned status {fb_r.status_code}.", reply_token=reply_token)
-                        except Exception:
-                            pass
-                    chk_results = fb_r.json().get("results", [])
-                except Exception:
-                    chk_results = []
-
-            # 計算相同序號數量
-            same_count = 0
-            for res in chk_results:
-                props_r = res.get("properties", {})
-                s_prop_r = props_r.get("sysSerial", {})
-                val = None
-                if "title" in s_prop_r and s_prop_r.get("title"):
-                    val = s_prop_r["title"][0].get("plain_text") or s_prop_r["title"][0].get("text", {}).get("content")
-                elif "rich_text" in s_prop_r and s_prop_r.get("rich_text"):
-                    val = s_prop_r["rich_text"][0].get("plain_text")
-                elif "number" in s_prop_r and s_prop_r.get("number") is not None:
-                    val = str(s_prop_r.get("number"))
-                if val is not None and str(val) == str(next_serial):
-                    same_count += 1
-
-            if same_count <= 1:
-                # 成功（沒有或只有自己）
+            if len(chk_results) <= 1:
                 break
 
-            # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
-            try:
-                # 發生重複：將剛建立的頁面序號遞增，繼續下一輪檢查
-                pass
-            except Exception:
-                pass
+            # 發生重複：遞增序號並更新剛建立的頁面
             try:
                 next_serial += 1
-                # 依照目前 serial_type 更新格式
-                if serial_type == "number":
-                    patch_props = {"sysSerial": {"number": next_serial}}
-                elif serial_type == "rich_text":
-                    patch_props = {"sysSerial": {"rich_text": [{"text": {"content": str(next_serial)}}]}}
-                else:
-                    patch_props = {"sysSerial": {"title": [{"text": {"content": str(next_serial)}}]}}
+                patch_props = {"sysSerial": {"title": [{"text": {"content": str(next_serial)}}]}}
                 requests.patch(f"https://api.notion.com/v1/pages/{created_page_id}", headers=NOTION_HEADERS, json={"properties": patch_props})
             except Exception:
-                # 若無法 patch，繼續下一次嘗試（下次會重新計算）
                 pass
 
         # 迴圈結束：若仍未建立 page id，視為建立失敗
@@ -320,7 +253,7 @@ def handle_message(event):
         parts = re.split(r"[，,\s]+", arg, maxsplit=1)
         if len(parts) == 2 and parts[0] and parts[1]:
             lang1, lang2 = parts[0].strip(), parts[1].strip()
-            notion_set(source_id, lang1, lang2, reply_token=event.reply_token)
+            notion_set(source_id, lang1, lang2)
             reply = (
                 f"✅ 翻譯語言設定成功！\n"
                 f"🔤 語言1：{lang1}\n"
