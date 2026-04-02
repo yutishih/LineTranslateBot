@@ -3,10 +3,13 @@ import re
 import requests
 import anthropic
 import datetime
-from flask import Flask, request, abort
+from flask import Flask, request, abort, render_template, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from linebot.models import (
+    MessageEvent, TextMessage, TextSendMessage,
+    TemplateSendMessage, ButtonsTemplate, URITemplateAction
+)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,6 +24,8 @@ NOTION_TOKEN = os.environ["NOTION_INTERNAL_INTEGRATION_SECRET"]
 
 # 新版 Notion Data Source 架構
 NOTION_DATA_SOURCE_ID = os.environ["NOTION_DATA_SOURCE_ID"]
+LIFF_ID = os.environ.get("LIFF_ID", "")
+LIFF_CHANNEL_ID = os.environ.get("LIFF_CHANNEL_ID", "")
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
@@ -43,9 +48,13 @@ def notion_get(source_id):
         props = results[0]["properties"]
         lang1_list = props["lang1"]["rich_text"]
         lang2_list = props["lang2"]["rich_text"]
+        user1_list = props.get("user1", {}).get("rich_text", [])
+        user2_list = props.get("user2", {}).get("rich_text", [])
         return {
             "lang1": lang1_list[0]["plain_text"] if lang1_list else "",
             "lang2": lang2_list[0]["plain_text"] if lang2_list else "",
+            "user1": user1_list[0]["plain_text"] if user1_list else "",
+            "user2": user2_list[0]["plain_text"] if user2_list else "",
             "page_id": results[0]["id"],
         }
     return None
@@ -161,6 +170,68 @@ def notion_delete(source_id):
     return False
 
 
+def notion_register_user(group_source_id, user_id, lang):
+    """Register a user's language in a group record.
+
+    Returns (success: bool, message: str).
+    """
+    existing = notion_get(group_source_id)
+    if existing is None:
+        # First user — create record with user1/lang1
+        notion_set(group_source_id, lang, "")
+        # Then patch user1
+        record = notion_get(group_source_id)
+        if record:
+            requests.patch(
+                f"https://api.notion.com/v1/pages/{record['page_id']}",
+                headers=NOTION_HEADERS,
+                json={"properties": {
+                    "user1": {"rich_text": [{"text": {"content": user_id}}]},
+                }},
+            )
+        return True, "✅ 你的語言已設定！等待另一位用戶完成設定。"
+
+    u1 = existing["user1"]
+    u2 = existing["user2"]
+
+    if u1 == user_id:
+        # Update lang1
+        requests.patch(
+            f"https://api.notion.com/v1/pages/{existing['page_id']}",
+            headers=NOTION_HEADERS,
+            json={"properties": {
+                "lang1": {"rich_text": [{"text": {"content": lang}}]},
+            }},
+        )
+        return True, f"✅ 你的語言已更新為：{lang}"
+
+    if u2 == user_id:
+        # Update lang2
+        requests.patch(
+            f"https://api.notion.com/v1/pages/{existing['page_id']}",
+            headers=NOTION_HEADERS,
+            json={"properties": {
+                "lang2": {"rich_text": [{"text": {"content": lang}}]},
+            }},
+        )
+        return True, f"✅ 你的語言已更新為：{lang}"
+
+    if u2 == "":
+        # Second user — set user2/lang2
+        requests.patch(
+            f"https://api.notion.com/v1/pages/{existing['page_id']}",
+            headers=NOTION_HEADERS,
+            json={"properties": {
+                "user2": {"rich_text": [{"text": {"content": user_id}}]},
+                "lang2": {"rich_text": [{"text": {"content": lang}}]},
+            }},
+        )
+        return True, f"✅ 設定完成！翻譯已啟動：{existing['lang1']} ↔ {lang}"
+
+    # Both slots taken
+    return False, "❌ 此群組已有兩位用戶設定完成。請先發送 /stop 清除後重新設定。"
+
+
 def get_source_id(event):
     source = event.source
     if source.type == "group":
@@ -240,6 +311,50 @@ def callback():
     return "OK"
 
 
+@app.route("/liff", methods=["GET"])
+def liff_page():
+    return render_template("liff.html", liff_id=LIFF_ID)
+
+
+@app.route("/api/liff/save", methods=["POST"])
+def liff_save():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"status": "error", "message": "Invalid request"}), 400
+
+    id_token = data.get("id_token", "")
+    context_type = data.get("context_type", "")
+
+    # Verify ID token with LINE
+    verify_resp = requests.post(
+        "https://api.line.me/oauth2/v2.1/verify",
+        data={"id_token": id_token, "client_id": LIFF_CHANNEL_ID},
+    )
+    if verify_resp.status_code != 200:
+        return jsonify({"status": "error", "message": "身份驗證失敗，請重新開啟頁面。"}), 401
+
+    user_id = verify_resp.json().get("sub", "")
+    if not user_id:
+        return jsonify({"status": "error", "message": "無法取得用戶身份。"}), 401
+
+    if context_type == "group":
+        group_id = data.get("group_id", "")
+        lang = data.get("lang", "").strip()
+        if not group_id or not lang:
+            return jsonify({"status": "error", "message": "缺少必要欄位。"}), 400
+        success, message = notion_register_user(f"group_{group_id}", user_id, lang)
+        status = "ok" if success else "error"
+        return jsonify({"status": status, "message": message})
+    else:
+        # 1-on-1
+        lang1 = data.get("lang1", "").strip()
+        lang2 = data.get("lang2", "").strip()
+        if not lang1 or not lang2:
+            return jsonify({"status": "error", "message": "請設定兩種語言。"}), 400
+        notion_set(f"user_{user_id}", lang1, lang2)
+        return jsonify({"status": "ok", "message": f"✅ 設定完成！翻譯已啟動：{lang1} ↔ {lang2}"})
+
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     text = event.message.text.strip()
@@ -292,13 +407,30 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
+    # /register — 開啟 LIFF 語言設定頁面
+    if text.lower() == "/register":
+        liff_url = f"https://liff.line.me/{LIFF_ID}"
+        reply = TemplateSendMessage(
+            alt_text="請點擊下方按鈕設定語言",
+            template=ButtonsTemplate(
+                title="🌐 語言設定",
+                text="點擊按鈕開啟設定頁面，登入後選擇你的語言。",
+                actions=[
+                    URITemplateAction(label="開始設定", uri=liff_url)
+                ]
+            )
+        )
+        line_bot_api.reply_message(event.reply_token, reply)
+        return
+
     # /help — 顯示說明
     if text.lower() in ("/help", "/說明"):
         reply = (
             "📖 LINE 翻譯機器人\n\n"
             "指令列表：\n"
-            "/setlang <語言1> <語言2>\n"
-            "  設定翻譯語言\n"
+            "/register  設定語言（LIFF 頁面）\n\n"
+            "/setlang <語言と1> <語言と2>\n"
+            "  設定翻譯語言（文字指令）\n"
             "  範例：/setlang 中文 英文\n\n"
             "/status  查看目前設定\n\n"
             "/stop    停止翻譯\n\n"
