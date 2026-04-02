@@ -361,24 +361,49 @@ def liff_save():
             if not lang1 or not lang2:
                 return jsonify({"status": "error", "message": "請設定兩種語言。"}), 400
             source_id = f"user_{user_id}"
-            # 先檢查 notion_get 是否能正常查詢
+            # 先檢查是否已有記錄
             pre_check = notion_get(source_id)
-            notion_set(source_id, lang1, lang2)
-            # 驗證寫入是否成功
-            record = notion_get(source_id)
-            if record is None:
-                # 直接測試 Notion API 連通性
-                test_url = f"https://api.notion.com/v1/data_sources/{NOTION_DATA_SOURCE_ID}/query"
-                test_payload = {"filter": {"property": "source_id", "rich_text": {"equals": source_id}}}
-                test_res = requests.post(test_url, headers=NOTION_HEADERS, json=test_payload)
-                debug_info = {
-                    "source_id": source_id,
-                    "pre_existing": pre_check is not None,
-                    "notion_query_status": test_res.status_code,
-                    "notion_query_body": test_res.text[:500],
+            if pre_check:
+                # 更新現有記錄
+                requests.patch(
+                    f"https://api.notion.com/v1/pages/{pre_check['page_id']}",
+                    headers=NOTION_HEADERS,
+                    json={"properties": {
+                        "source_id": {"rich_text": [{"text": {"content": source_id}}]},
+                        "lang1": {"rich_text": [{"text": {"content": lang1}}]},
+                        "lang2": {"rich_text": [{"text": {"content": lang2}}]},
+                    }},
+                )
+                return jsonify({"status": "ok", "message": f"✅ 設定已更新！翻譯：{lang1} ↔ {lang2}"})
+            else:
+                # 直接建立新 page，跳過 notion_set 的複雜邏輯以便 debug
+                date_iso = datetime.date.today().isoformat()
+                create_props = {
+                    "sysSerial": {"title": [{"text": {"content": "LIFF"}}]},
+                    "source_id": {"rich_text": [{"text": {"content": source_id}}]},
+                    "lang1": {"rich_text": [{"text": {"content": lang1}}]},
+                    "lang2": {"rich_text": [{"text": {"content": lang2}}]},
+                    "Date": {"date": {"start": date_iso}},
                 }
-                return jsonify({"status": "error", "message": "資料儲存失敗", "debug": debug_info}), 500
-            return jsonify({"status": "ok", "message": f"✅ 設定完成！翻譯已啟動：{lang1} ↔ {lang2}"})
+                create_resp = requests.post(
+                    "https://api.notion.com/v1/pages",
+                    headers=NOTION_HEADERS,
+                    json={
+                        "parent": {"data_source_id": NOTION_DATA_SOURCE_ID},
+                        "properties": create_props,
+                    },
+                )
+                if create_resp.status_code in (200, 201):
+                    return jsonify({"status": "ok", "message": f"✅ 設定完成！翻譯已啟動：{lang1} ↔ {lang2}"})
+                else:
+                    return jsonify({
+                        "status": "error",
+                        "message": "Notion 建立失敗",
+                        "debug": {
+                            "status_code": create_resp.status_code,
+                            "body": create_resp.text[:500],
+                        }
+                    }), 500
     except Exception:
         return jsonify({"status": "error", "message": "伺服器錯誤，請稍後再試。"}), 500
 
