@@ -188,6 +188,38 @@
     let contextType = "";
     let groupId = "";
 
+    // LINE language code → dropdown option mapping
+    const LANG_MAP = {
+      "zh-TW": "中文（繁體）",
+      "zh-CN": "中文（簡體）",
+      "zh-Hant": "中文（繁體）",
+      "zh-Hans": "中文（簡體）",
+      "en": "English",
+      "ja": "日本語",
+      "ko": "한국어",
+      "fr": "Français",
+      "de": "Deutsch",
+      "es": "Español",
+      "pt": "Português",
+      "th": "ภาษาไทย",
+      "id": "Bahasa Indonesia",
+      "vi": "Tiếng Việt",
+    };
+
+    function preselectLang(selectId, langCode) {
+      if (!langCode) return;
+      // Try exact match first, then prefix (e.g. "zh-TW" → "zh-TW", "en-US" → "en")
+      const mapped = LANG_MAP[langCode] || LANG_MAP[langCode.split("-")[0]] || "";
+      if (!mapped) return;
+      const sel = document.getElementById(selectId);
+      for (const opt of sel.options) {
+        if (opt.text === mapped || opt.value === mapped) {
+          sel.value = opt.value;
+          break;
+        }
+      }
+    }
+
     function toggleCustom(selectId, inputId) {
       const sel = document.getElementById(selectId);
       const inp = document.getElementById(inputId);
@@ -277,10 +309,12 @@
           const form = document.getElementById("form-group");
           form.style.display = "block";
           form.addEventListener("submit", submitGroup);
+          preselectLang("lang-group", ctx.language);
         } else {
           const form = document.getElementById("form-solo");
           form.style.display = "block";
           form.addEventListener("submit", submitSolo);
+          preselectLang("lang1-solo", ctx.language);
         }
       } catch (err) {
         document.getElementById("loading").textContent = "初始化失敗：" + err.message;
