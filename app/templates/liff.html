@@ -298,9 +298,18 @@
         contextType = ctx.type;
         groupId = ctx.groupId || ctx.roomId || "";
 
+        // 取得語言代碼
+        let userLang = ctx.language;
+        if (!userLang && typeof liff.getLanguage === "function") {
+          try {
+            userLang = liff.getLanguage();
+          } catch (e) {
+            userLang = "";
+          }
+        }
         // DEBUG: 顯示 language 值
         console.log("LIFF context:", JSON.stringify(ctx));
-        alert("language: " + ctx.language + " | type: " + ctx.type);
+        alert("language: " + userLang + " | type: " + ctx.type);
 
         const profile = await liff.getProfile();
         document.getElementById("avatar").src = profile.pictureUrl || "";
@@ -313,12 +322,12 @@
           const form = document.getElementById("form-group");
           form.style.display = "block";
           form.addEventListener("submit", submitGroup);
-          preselectLang("lang-group", ctx.language);
+          preselectLang("lang-group", userLang);
         } else {
           const form = document.getElementById("form-solo");
           form.style.display = "block";
           form.addEventListener("submit", submitSolo);
-          preselectLang("lang1-solo", ctx.language);
+          preselectLang("lang1-solo", userLang);
         }
       } catch (err) {
         document.getElementById("loading").textContent = "初始化失敗：" + err.message;
