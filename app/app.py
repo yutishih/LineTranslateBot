@@ -326,10 +326,15 @@ def liff_save():
     context_type = data.get("context_type", "")
 
     # Verify ID token with LINE
-    verify_resp = requests.post(
-        "https://api.line.me/oauth2/v2.1/verify",
-        data={"id_token": id_token, "client_id": LIFF_CHANNEL_ID},
-    )
+    try:
+        verify_resp = requests.post(
+            "https://api.line.me/oauth2/v2.1/verify",
+            data={"id_token": id_token, "client_id": LIFF_CHANNEL_ID},
+            timeout=10,
+        )
+    except Exception:
+        return jsonify({"status": "error", "message": "身份驗證連線失敗，請稍後再試。"}), 503
+
     if verify_resp.status_code != 200:
         return jsonify({"status": "error", "message": "身份驗證失敗，請重新開啟頁面。"}), 401
 
@@ -337,22 +342,29 @@ def liff_save():
     if not user_id:
         return jsonify({"status": "error", "message": "無法取得用戶身份。"}), 401
 
-    if context_type == "group":
-        group_id = data.get("group_id", "")
-        lang = data.get("lang", "").strip()
-        if not group_id or not lang:
-            return jsonify({"status": "error", "message": "缺少必要欄位。"}), 400
-        success, message = notion_register_user(f"group_{group_id}", user_id, lang)
-        status = "ok" if success else "error"
-        return jsonify({"status": status, "message": message})
-    else:
-        # 1-on-1
-        lang1 = data.get("lang1", "").strip()
-        lang2 = data.get("lang2", "").strip()
-        if not lang1 or not lang2:
-            return jsonify({"status": "error", "message": "請設定兩種語言。"}), 400
-        notion_set(f"user_{user_id}", lang1, lang2)
-        return jsonify({"status": "ok", "message": f"✅ 設定完成！翻譯已啟動：{lang1} ↔ {lang2}"})
+    try:
+        if context_type == "group" or context_type == "room":
+            group_id = data.get("group_id", "")
+            lang = data.get("lang", "").strip()
+            if not group_id or not lang:
+                return jsonify({"status": "error", "message": "缺少必要欄位。"}), 400
+            success, message = notion_register_user(f"group_{group_id}", user_id, lang)
+            status = "ok" if success else "error"
+            return jsonify({"status": status, "message": message})
+        else:
+            # 1-on-1
+            lang1 = data.get("lang1", "").strip()
+            lang2 = data.get("lang2", "").strip()
+            if not lang1 or not lang2:
+                return jsonify({"status": "error", "message": "請設定兩種語言。"}), 400
+            notion_set(f"user_{user_id}", lang1, lang2)
+            # 驗證寫入是否成功
+            record = notion_get(f"user_{user_id}")
+            if record is None:
+                return jsonify({"status": "error", "message": "資料儲存失敗，請確認 Notion 環境設定後再試。"}), 500
+            return jsonify({"status": "ok", "message": f"✅ 設定完成！翻譯已啟動：{lang1} ↔ {lang2}"})
+    except Exception:
+        return jsonify({"status": "error", "message": "伺服器錯誤，請稍後再試。"}), 500
 
 
 @handler.add(MessageEvent, message=TextMessage)

@@ -243,7 +243,9 @@
         const data = await res.json();
         showMsg(data.message, data.status !== "ok");
         if (data.status === "ok") {
-          setTimeout(() => liff.closeWindow(), 2000);
+          if (liff.isInClient()) {
+            setTimeout(() => liff.closeWindow(), 2000);
+          }
         }
       } catch (err) {
         showMsg("發送失敗，請稍後再試。", true);
