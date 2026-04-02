@@ -362,9 +362,18 @@ def liff_save():
                 return jsonify({"status": "error", "message": "請設定兩種語言。"}), 400
             source_id = f"user_{user_id}"
             notion_set(source_id, lang1, lang2)
+            # 寫入 user1 欄位
             record = notion_get(source_id)
             if record is None:
                 return jsonify({"status": "error", "message": "資料儲存失敗，請稍後再試。"}), 500
+            if record["user1"] != user_id:
+                requests.patch(
+                    f"https://api.notion.com/v1/pages/{record['page_id']}",
+                    headers=NOTION_HEADERS,
+                    json={"properties": {
+                        "user1": {"rich_text": [{"text": {"content": user_id}}]},
+                    }},
+                )
             return jsonify({"status": "ok", "message": f"✅ 設定完成！翻譯已啟動：{lang1} ↔ {lang2}"})
     except Exception:
         return jsonify({"status": "error", "message": "伺服器錯誤，請稍後再試。"}), 500
