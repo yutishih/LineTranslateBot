@@ -43,6 +43,9 @@ def notion_get(source_id):
         }
     }
     res = requests.post(url, headers=NOTION_HEADERS, json=payload)
+    if res.status_code != 200:
+        app.logger.error(f"notion_get failed: {res.status_code} {res.text[:300]}")
+        return None
     results = res.json().get("results", [])
     if results:
         props = results[0]["properties"]
@@ -357,11 +360,18 @@ def liff_save():
             lang2 = data.get("lang2", "").strip()
             if not lang1 or not lang2:
                 return jsonify({"status": "error", "message": "請設定兩種語言。"}), 400
-            notion_set(f"user_{user_id}", lang1, lang2)
+            source_id = f"user_{user_id}"
+            notion_set(source_id, lang1, lang2)
             # 驗證寫入是否成功
-            record = notion_get(f"user_{user_id}")
+            record = notion_get(source_id)
             if record is None:
-                return jsonify({"status": "error", "message": "資料儲存失敗，請確認 Notion 環境設定後再試。"}), 500
+                # 回傳 debug 資訊方便排查
+                debug_info = {
+                    "source_id": source_id,
+                    "NOTION_DATA_SOURCE_ID": NOTION_DATA_SOURCE_ID[:8] + "..." if NOTION_DATA_SOURCE_ID else "(empty)",
+                    "NOTION_TOKEN_set": bool(NOTION_TOKEN),
+                }
+                return jsonify({"status": "error", "message": "資料儲存失敗", "debug": debug_info}), 500
             return jsonify({"status": "ok", "message": f"✅ 設定完成！翻譯已啟動：{lang1} ↔ {lang2}"})
     except Exception:
         return jsonify({"status": "error", "message": "伺服器錯誤，請稍後再試。"}), 500
