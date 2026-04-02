@@ -361,15 +361,21 @@ def liff_save():
             if not lang1 or not lang2:
                 return jsonify({"status": "error", "message": "請設定兩種語言。"}), 400
             source_id = f"user_{user_id}"
+            # 先檢查 notion_get 是否能正常查詢
+            pre_check = notion_get(source_id)
             notion_set(source_id, lang1, lang2)
             # 驗證寫入是否成功
             record = notion_get(source_id)
             if record is None:
-                # 回傳 debug 資訊方便排查
+                # 直接測試 Notion API 連通性
+                test_url = f"https://api.notion.com/v1/data_sources/{NOTION_DATA_SOURCE_ID}/query"
+                test_payload = {"filter": {"property": "source_id", "rich_text": {"equals": source_id}}}
+                test_res = requests.post(test_url, headers=NOTION_HEADERS, json=test_payload)
                 debug_info = {
                     "source_id": source_id,
-                    "NOTION_DATA_SOURCE_ID": NOTION_DATA_SOURCE_ID[:8] + "..." if NOTION_DATA_SOURCE_ID else "(empty)",
-                    "NOTION_TOKEN_set": bool(NOTION_TOKEN),
+                    "pre_existing": pre_check is not None,
+                    "notion_query_status": test_res.status_code,
+                    "notion_query_body": test_res.text[:500],
                 }
                 return jsonify({"status": "error", "message": "資料儲存失敗", "debug": debug_info}), 500
             return jsonify({"status": "ok", "message": f"✅ 設定完成！翻譯已啟動：{lang1} ↔ {lang2}"})
