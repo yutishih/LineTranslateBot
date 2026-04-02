@@ -298,6 +298,10 @@
         contextType = ctx.type;
         groupId = ctx.groupId || ctx.roomId || "";
 
+        // DEBUG: 顯示 language 值
+        console.log("LIFF context:", JSON.stringify(ctx));
+        alert("language: " + ctx.language + " | type: " + ctx.type);
+
         const profile = await liff.getProfile();
         document.getElementById("avatar").src = profile.pictureUrl || "";
         document.getElementById("display-name").textContent = profile.displayName;
